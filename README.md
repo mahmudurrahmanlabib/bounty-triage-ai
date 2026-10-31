@@ -2,7 +2,7 @@
 
 In-browser, privacy-first triage for bug bounty / vulnerability reports, powered by an **open-weight AI model**.
 
-**Live demo:** https://mahmudurrahmanlabib.github.io/bounty-triage-ai/
+**Live demo:** https://mahmudurlabib.com/bounty-triage-ai/
 
 Paste a report and get:
 - Suggested vulnerability class (XSS, SQLi, IDOR, SSRF, RCE, Auth bypass, CSRF, Info disclosure)
